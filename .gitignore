@@ -4,4 +4,6 @@ __pycache__/
 .env.*
 !.env.example
 .ollama-local/
+.miniapp-local/
+.recipe-cache/
 baseline.txt

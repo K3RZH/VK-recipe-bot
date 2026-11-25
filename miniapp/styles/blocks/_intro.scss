@@ -1,0 +1,115 @@
+@use "../variables" as *;
+
+.intro {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 48px;
+  padding: clamp(24px, 4vw, 56px);
+  color: $paper;
+  background: $green;
+}
+
+.intro__body {
+  container-type: inline-size;
+}
+
+.intro__brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.intro__mark {
+  position: relative;
+  width: 24px;
+  height: 18px;
+  border: 2px solid $lime;
+  border-radius: 3px 3px 14px 14px;
+}
+
+.intro__mark::before {
+  position: absolute;
+  inset: -8px 8px auto auto;
+  width: 5px;
+  height: 9px;
+  border-radius: 0 8px;
+  transform: rotate(-28deg);
+  background: $lime;
+  content: "";
+}
+
+.intro__title {
+  margin: 0;
+  font-size: clamp(1.75rem, 12.75cqi, 3.15rem);
+  font-weight: 760;
+  line-height: .99;
+  letter-spacing: -.068em;
+  overflow-wrap: anywhere;
+}
+
+.intro__description {
+  max-width: 27ch;
+  margin: 20px 0 26px;
+  color: $mint;
+  font-size: 1.04rem;
+}
+
+.intro__examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.intro__example {
+  min-height: 44px;
+  padding: 8px 13px;
+  border: 1px solid $mint;
+  border-radius: 22px;
+  background: transparent;
+  color: $paper;
+  font-size: .875rem;
+  text-align: left;
+}
+
+.intro__example:hover,
+.intro__example:focus-visible {
+  border-color: $lime;
+  background: $lime;
+  color: $ink;
+}
+
+.intro__example:focus-visible {
+  outline-color: $lime;
+}
+
+@media (max-width: 840px) {
+  .intro {
+    gap: 24px;
+  }
+
+  .intro__break {
+    display: none;
+  }
+
+  .intro__title {
+    font-size: clamp(1.65rem, 10cqi, 2.6rem);
+    letter-spacing: -.055em;
+  }
+
+  .intro__description {
+    max-width: 33ch;
+    margin: 12px 0 16px;
+  }
+}
+
+@media (max-width: 500px) {
+  .intro {
+    gap: 18px;
+    padding: 18px;
+  }
+}

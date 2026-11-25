@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Подбор рецептов из продуктов, которые есть дома.">
+    <title>Есть идея — подбор рецептов</title>
+    <link rel="stylesheet" href="/style.css">
+    <script src="/vk-bridge.min.js" defer></script>
+    <script src="/app.js" defer></script>
+  </head>
+  <body class="page">
+    <main class="workspace">
+      <header class="intro">
+        <p class="intro__brand">
+          <span class="intro__mark" aria-hidden="true"></span>
+          Есть идея
+        </p>
+        <div class="intro__body">
+          <h1 class="intro__title">Что<br class="intro__break"> приготовить?</h1>
+          <p class="intro__description">Напиши, что есть дома. Подберём блюдо и предложим вариант с небольшой покупкой.</p>
+          <div class="intro__examples" aria-label="Примеры запросов">
+            <button class="intro__example" type="button" data-example="Есть рис, яйца, вода, соль и растительное масло. Докупить могу только морковь.">Рис и яйца</button>
+            <button class="intro__example" type="button" data-example="Есть картофель, морковь, растительное масло и соль. Без покупок.">Картофель и морковь</button>
+          </div>
+        </div>
+      </header>
+      <section class="chat" aria-labelledby="chat-title">
+        <header class="chat__header">
+          <h2 class="chat__title" id="chat-title">Подбор рецептов</h2>
+        </header>
+        <div class="chat__log" id="chat-log" role="log" aria-label="Сообщения" tabindex="0">
+          <div class="chat__message">Что есть у тебя под рукой? Если хочешь готовить без покупок, напиши об этом.</div>
+        </div>
+        <form class="chat__form" id="recipe-form">
+          <label class="chat__label" for="ingredients">Что есть дома</label>
+          <textarea class="chat__input" id="ingredients" name="ingredients" rows="2" maxlength="500" placeholder="Например, рис и яйца" required></textarea>
+          <div class="chat__actions">
+            <p class="chat__status" id="recipe-status" role="status"></p>
+            <button class="chat__send" id="recipe-send" type="submit">Подобрать рецепт</button>
+          </div>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>

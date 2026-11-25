@@ -5,55 +5,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-
-STRINGS = {"type": "array", "items": {"type": "string", "minLength": 1}}
-PROPERTIES = {
-    "ingredients": STRINGS,
-    "excluded": STRINGS,
-    "can_buy": {"anyOf": [STRINGS, {"type": "null"}]},
-    "max_extra": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
-}
-SCHEMA = {
-    "type": "object",
-    "properties": PROPERTIES,
-    "required": list(PROPERTIES),
-    "additionalProperties": False,
-}
-PROMPT = """Извлеки из сообщения пользователя данные для поиска рецепта.
-Используй только то, что сказано в сообщении. Указывай названия по-русски,
-в именительном падеже и в единственном числе, если так говорят об этом
-продукте. Например: «помидоров» → «помидор», «макароны» → «макароны».
-ingredients — продукты, которые уже есть. Убери количества и единицы измерения.
-excluded — продукты и группы продуктов, которые пользователь исключает.
-can_buy — список продуктов, который пользователь явно разрешает докупить.
-Без такого списка верни null. При полном запрете покупок верни [].
-max_extra — максимум продуктов, которые можно докупить: «до двух» → 2,
-«без покупок» → 0. Без числового лимита или запрета верни null.
-Для ingredients и excluded используй [] при отсутствии данных.
-Если пользователь передумал, учитывай последнее уточнение.
-Верни JSON по схеме:
-""" + json.dumps(SCHEMA, ensure_ascii=False)
-
-
-def normalized(result):
-    if not isinstance(result, dict) or result.keys() != PROPERTIES.keys():
-        raise ValueError("Ожидался объект с четырьмя полями схемы.")
-    values = result.copy()
-    for field in ("ingredients", "excluded", "can_buy"):
-        items = result[field]
-        if field == "can_buy" and items is None:
-            continue
-        if not isinstance(items, list) or not all(
-            isinstance(item, str) and item.strip() for item in items
-        ):
-            raise ValueError(f"{field}: ожидался список непустых строк.")
-        values[field] = sorted(
-            {item.strip().casefold().replace("ё", "е") for item in items}
-        )
-    limit = result["max_extra"]
-    if limit is not None and (type(limit) is not int or limit < 0):
-        raise ValueError("max_extra: ожидалось целое неотрицательное число или null.")
-    return values
+from intent import DEFAULT_MODEL, PROPERTIES, ask_model, normalized
 
 
 def load_cases():
@@ -77,38 +29,9 @@ def load_cases():
     return cases
 
 
-def ask_model(model, message):
-    body = json.dumps({
-        "model": model,
-        "messages": [
-            {"role": "system", "content": PROMPT},
-            {"role": "user", "content": message},
-        ],
-        "format": SCHEMA,
-        "stream": False,
-        "think": False,
-        "options": {"temperature": 0, "seed": 42, "num_ctx": 2048, "num_predict": 256},
-    })
-    connection = http.client.HTTPConnection("127.0.0.1", 11434, timeout=180)
-    try:
-        connection.request("POST", "/api/chat", body, {"Content-Type": "application/json"})
-        response = connection.getresponse()
-        data = json.loads(response.read())
-        if not isinstance(data, dict):
-            raise RuntimeError("Ollama вернул неожиданный ответ.")
-        if response.status != 200:
-            raise RuntimeError(f"Ollama HTTP {response.status}: {data.get('error', data)}")
-        message = data.get("message")
-        if not isinstance(message, dict) or not isinstance(message.get("content"), str):
-            raise RuntimeError("В ответе Ollama нет текста сообщения.")
-        return message["content"]
-    finally:
-        connection.close()
-
-
 def main():
     parser = argparse.ArgumentParser(description="Проверка разбора запросов о рецептах.")
-    parser.add_argument("--model", default="gemma4:e2b-it-q4_K_M", help="Имя модели в Ollama.")
+    parser.add_argument("--model", default=DEFAULT_MODEL, help="Имя локальной модели.")
     parser.add_argument("--validate-data", action="store_true", help="Проверить файл примеров.")
     args = parser.parse_args()
 
