@@ -1,0 +1,24 @@
+{"text":"Курица, рис, помидоры. Что приготовить на ужин?", "expected":{"ingredients":["курица","рис","помидор"],"excluded":[],"can_buy":null,"max_extra":null}}
+{"text":"Есть 200 г творога и два яйца. Сахар не добавляй.", "expected":{"ingredients":["творог","яйцо"],"excluded":["сахар"],"can_buy":null,"max_extra":null}}
+{"text":"Отварила гречку. Ещё есть морковка и лук. За продуктами не пойду.", "expected":{"ingredients":["гречка","морковка","лук"],"excluded":[],"can_buy":[],"max_extra":0}}
+{"text":"В холодильнике курица и рис, грибы не ем. Докупить могу только лук.", "expected":{"ingredients":["курица","рис"],"excluded":["гриб"],"can_buy":["лук"],"max_extra":null}}
+{"text":"Из продуктов только картошка. Докуплю максимум две позиции.", "expected":{"ingredients":["картошка"],"excluded":[],"can_buy":null,"max_extra":2}}
+{"text":"Дома макароны и томатная паста, молочные продукты исключи.", "expected":{"ingredients":["макароны","томатная паста"],"excluded":["молочный продукт"],"can_buy":null,"max_extra":null}}
+{"text":"У меня замороженный горошек и рис. Нужен вариант без яиц и без орехов.", "expected":{"ingredients":["замороженный горошек","рис"],"excluded":["яйцо","орех"],"can_buy":null,"max_extra":null}}
+{"text":"Пасту с томатами хочу, но осталось только оливковое масло.", "expected":{"ingredients":["оливковое масло"],"excluded":[],"can_buy":null,"max_extra":null}}
+{"text":"Есть гречневая крупа, а сметаны нет. Могу купить сметану или йогурт, но только один продукт.", "expected":{"ingredients":["гречневая крупа"],"excluded":[],"can_buy":["сметана","йогурт"],"max_extra":1}}
+{"text":"Взял бы что-нибудь на ужин. Без свинины.", "expected":{"ingredients":[],"excluded":["свинина"],"can_buy":null,"max_extra":null}}
+{"text":"Есть куриное филе. Думал докупить сливки, но передумал: вообще без покупок.", "expected":{"ingredients":["куриное филе"],"excluded":[],"can_buy":[],"max_extra":0}}
+{"text":"Сначала думал, что яйца дома. Проверил: яиц нет. Остались только молоко и мука.", "expected":{"ingredients":["молоко","мука"],"excluded":[],"can_buy":null,"max_extra":null}}
+{"text":"Что можно приготовить за двадцать минут?", "expected":{"ingredients":[],"excluded":[],"can_buy":null,"max_extra":null}}
+{"text":"яблоки / овсяные хлопья / мёд. Из магазина можно только корицу", "expected":{"ingredients":["яблоко","овсяные хлопья","мёд"],"excluded":[],"can_buy":["корица"],"max_extra":null}}
+{"text":"Есть одна пачка чечевицы, полстакана риса и 100 мл сливок.", "expected":{"ingredients":["чечевица","рис","сливки"],"excluded":[],"can_buy":null,"max_extra":null}}
+{"text":"Есть рыс и куруца, докуплю до 2 продуктов.", "expected":{"ingredients":["рис","курица"],"excluded":[],"can_buy":null,"max_extra":2}}
+{"text":"Нужен рецепт из яиц и муки, это всё есть. Молока дома нет, но использовать его можно.", "expected":{"ingredients":["яйцо","мука"],"excluded":[],"can_buy":null,"max_extra":null}}
+{"text":"Есть свежий огурец и консервированный тунец. Соевый соус и майонез не клади. Могу купить лимон и зелень, больше ничего.", "expected":{"ingredients":["свежий огурец","консервированный тунец"],"excluded":["соевый соус","майонез"],"can_buy":["лимон","зелень"],"max_extra":null}}
+{"text":"Шпинат есть, яйца оказались испорчены, их не используй.", "expected":{"ingredients":["шпинат"],"excluded":["яйцо"],"can_buy":null,"max_extra":null}}
+{"text":"Покупки можно. В шкафу нут и булгур, а кокосовое молоко в рецепт не надо.", "expected":{"ingredients":["нут","булгур"],"excluded":["кокосовое молоко"],"can_buy":null,"max_extra":null}}
+{"text":"Сделай ужин из тыквы и фасоли. Фасоль закупать не надо, она уже есть, тыква тоже.", "expected":{"ingredients":["тыква","фасоль"],"excluded":[],"can_buy":null,"max_extra":null}}
+{"text":"В холодильнике перец и баклажан. Острый перец не предлагай, могу докупить до одного продукта.", "expected":{"ingredients":["перец","баклажан"],"excluded":["острый перец"],"can_buy":null,"max_extra":1}}
+{"text":"На ужин пельмени не хочу. Дома из продуктов только капуста и немного фарша.", "expected":{"ingredients":["капуста","фарш"],"excluded":[],"can_buy":null,"max_extra":null}}
+{"text":"Собери блюдо из остатков: поллуковицы, два помидора и ещё один помидор.", "expected":{"ingredients":["лук","помидор"],"excluded":[],"can_buy":null,"max_extra":null}}
