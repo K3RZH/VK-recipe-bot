@@ -13,6 +13,8 @@ LICENSE_PATTERN = re.compile(r"/(?:licenses/by(?:-sa)?/[1-4]\.\d|publicdomain/ze
 FISH = re.compile(r"лосос|семг")
 BAKED = re.compile(r"духов|запеч|фольг|пергамент")
 UNCOOKED = re.compile(r"солен|засол|тартар|сашими|суши|ролл|сырой")
+SHCHI = re.compile(r"\bщи\b")
+GREEN_SHCHI = re.compile(r"щавел|крапив|шпинат|\bзеленые щи\b|\bщи зеленые\b")
 
 
 class PlainText(HTMLParser):
@@ -63,6 +65,8 @@ def commons_query(filename, dish, _day):
 
 def photo_search(title):
     name = title.casefold().replace("ё", "е")
+    if SHCHI.search(name) and not GREEN_SHCHI.search(name):
+        return "Shchi.jpg", "Щи из капусты"
     if FISH.search(name) and not UNCOOKED.search(name) and BAKED.search(name):
         return "Salmon baked in an oven with lemons.jpg", "Запечённый лосось"
     if ("макарон" in name and "тушенк" in name) or "по-флотски" in name:
