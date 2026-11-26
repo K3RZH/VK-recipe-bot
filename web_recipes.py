@@ -375,9 +375,10 @@ def summarize(model, recipe):
     except (*NETWORK_ERRORS, RuntimeError, ValueError, AttributeError):
         return []
     if not isinstance(steps, list) or not 2 <= len(steps) <= 5 or not all(
-        isinstance(step, str) and 0 < len(step) <= 220 for step in steps
+        isinstance(step, str) and step.strip() and len(step) <= 220 for step in steps
     ):
         return []
+    steps = [" ".join(step.split()) for step in steps]
     numbers = set(re.findall(r"\d+", source))
     if any(not set(re.findall(r"\d+", step)) <= numbers for step in steps):
         return []
