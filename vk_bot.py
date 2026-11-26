@@ -111,7 +111,7 @@ def menu_cards(heading, sections, excluded):
             payload = json.dumps({"r": dish, "x": excluded}, ensure_ascii=False, separators=(",", ":"))
             if len(payload.encode("utf-8")) > PAYLOAD_LIMIT:
                 raise ValueError("Список исключений слишком длинный для кнопки ВК.")
-            buttons.append({"color": "secondary", "action": {
+            buttons.append({"color": "primary", "action": {
                 "type": "text", "label": f"Покажи подробно №{number}", "payload": payload,
             }})
     cards.append(("\n".join(lines), buttons))
@@ -255,7 +255,9 @@ class VkClient:
             if attachments and index == len(parts) - 1:
                 params["attachment"] = ",".join(attachments)
             if buttons and index == len(parts) - 1:
-                params["keyboard"] = json.dumps({"inline": True, "buttons": buttons}, ensure_ascii=False)
+                params["keyboard"] = json.dumps(
+                    {"one_time": False, "inline": True, "buttons": buttons}, ensure_ascii=False
+                )
             try:
                 self.call("messages.send", **params)
             except IO_ERRORS:
@@ -306,8 +308,10 @@ def handle_update(vk, update, model, recipes):
             try:
                 for offset, (page, buttons) in enumerate(cards):
                     vk.send(peer_id, message_id, page, buttons=buttons, offset=offset)
-            except (*IO_ERRORS, VkError):
+            except IO_ERRORS:
                 print("Не удалось отправить меню в VK.", file=sys.stderr)
+            except VkError as error:
+                print(f"Не удалось отправить меню в VK. {error}", file=sys.stderr)
             return
 
     attachments = []
