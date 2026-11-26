@@ -113,6 +113,42 @@ menu — меню для события, приёма пищи или дня, е
 """ + JSON_INSTRUCTION + json.dumps(VK_REQUEST_SCHEMA, ensure_ascii=False)
 
 
+PURCHASE_FLAGS = ("purchase_limit", "purchase_list")
+PURCHASE_SCHEMA = {
+    "type": "object", "properties": {key: {"type": "boolean"} for key in PURCHASE_FLAGS},
+    "required": list(PURCHASE_FLAGS), "additionalProperties": False,
+}
+PURCHASE_PROMPT = """Отметь только ограничения на покупки, которые пользователь прямо написал.
+purchase_limit=true, если он отказался от покупок или ограничил число покупок.
+purchase_list=true, если он перечислил продукты, которые готов купить.
+Просьба приготовить блюдо, вопрос «что купить», запрет на ингредиент и описание запасов сами по себе дают false.
+«Хочу оладьи» → {"purchase_limit":false,"purchase_list":false}
+«Есть рис, за продуктами не пойду» → {"purchase_limit":true,"purchase_list":false}
+«Оладьи без сахара. Купить могу молоко» → {"purchase_limit":false,"purchase_list":true}
+«Докуплю до двух продуктов» → {"purchase_limit":true,"purchase_list":false}
+Верни только JSON."""
+EMPTY_EXCLUSIONS = {"[]", "нет", "ничего", "никаких", "ничего не указано", "не указано"}
+
+
+def confirm_purchases(model, message, intent):
+    if intent["can_buy"] is None and intent["max_extra"] is None:
+        return intent
+
+    flags = json.loads(structured_chat(model, PURCHASE_PROMPT, message, PURCHASE_SCHEMA, max_tokens=64))
+    if (not isinstance(flags, dict) or flags.keys() != PURCHASE_SCHEMA["properties"].keys()
+            or not all(type(value) is bool for value in flags.values())):
+        raise ValueError("Не удалось подтвердить условия покупки из запроса.")
+    if not flags["purchase_limit"]:
+        intent["max_extra"] = None
+    elif intent["max_extra"] is None and intent["can_buy"] == []:
+        intent["max_extra"] = 0
+    if not flags["purchase_list"]:
+        intent["can_buy"] = None
+    if intent["max_extra"] == 0:
+        intent["can_buy"] = []
+    return intent
+
+
 def understand_request(model, message, *, allow_menu=False):
     schema, prompt = (VK_REQUEST_SCHEMA, VK_REQUEST_PROMPT) if allow_menu else (REQUEST_SCHEMA, REQUEST_PROMPT)
     result = json.loads(structured_chat(model, prompt, message, schema))
@@ -123,7 +159,11 @@ def understand_request(model, message, *, allow_menu=False):
         raise ValueError("Неизвестный тип запроса.")
     if mode == "dish" and (not isinstance(dish, str) or not 0 < len(dish.strip()) <= 80):
         raise ValueError("В запросе не определилось название блюда.")
-    return mode, dish, normalized(result)
+    intent = normalized(result)
+    intent["excluded"] = [item for item in intent["excluded"] if item not in EMPTY_EXCLUSIONS]
+    if mode in {"dish", "pantry"}:
+        intent = confirm_purchases(model, message, intent)
+    return mode, dish, intent
 
 
 def structured_chat(model, prompt, message, schema, *, max_tokens=256):
