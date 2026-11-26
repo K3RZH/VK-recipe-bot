@@ -17,14 +17,23 @@ function addMessage(text, fromUser = false) {
   if (fromUser) {
     message.textContent = text;
   } else {
-    const parts = text.split(/(^https:\/\/(?:www\.themealdb\.com\/meal\/[0-9]+|finecooking\.ru\/recipe\/[a-z0-9-]+|1000\.menu\/cooking\/[0-9]+-[a-z0-9-]+)$)/m);
-    for (const [index, part] of parts.entries()) {
-      if (index % 2 === 0) {
-        message.append(part);
+    const lines = text.split("\n");
+    for (const [index, line] of lines.entries()) {
+      if (index) message.append("\n");
+      let url;
+      try {
+        if (lines[index - 1]?.startsWith("Источник: ") && line.startsWith("https://")) {
+          url = new URL(line);
+        }
+      } catch {
+        url = null;
+      }
+      if (!url || url.username || url.password || url.port) {
+        message.append(line);
         continue;
       }
       const link = document.createElement("a");
-      link.href = part;
+      link.href = url.href;
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       link.textContent = "Открыть оригинал";

@@ -1,13 +1,12 @@
 import argparse
 import http.client
 import json
-import re
 import sys
 from pathlib import Path
 
-from intent import DEFAULT_MODEL, ask_model, normalized, recipe_target
+from intent import DEFAULT_MODEL, understand_request
 from themealdb import CACHE_PATH
-from web_recipes import cooking_priority, score_path, search, stems, summarize
+from web_recipes import cooking_priority, search, stems, summarize
 
 
 HELP = (
@@ -58,11 +57,6 @@ PANTRY = {"вода", "соль", "сахар", "черный перец", "пе
           "растительное масло", "сливочное масло", "масло"}
 SEASONINGS = {"зелень", "черный перец", "перец", "специи сухие"}
 NO_MATCH = "В моём каталоге пока нет рецепта под эти условия."
-RECIPE_QUESTION = re.compile(
-    r"\b(?:что\s+(?:(?:мне|еще|нам)\s+)*(?:нуж\w*|понадоб\w*|надо|купить)"
-    r"|какие\s+(?:нужны\s+)?(?:продукты|ингредиенты)|как\s+(?:сделать|приготовить)\s+(?!из\b|что\b))"
-)
-STOCK_MENTION = re.compile(r"\b(?:есть|имеется|в наличии|в холодильнике|остал[оа]сь)\b")
 DEMO_INTENT = {
     "ingredients": ["рис", "яйцо", "растительное масло", "соль", "вода"],
     "excluded": [],
@@ -134,38 +128,53 @@ def excluded_ingredients(intent):
     return excluded
 
 
-def suggest_recipes(intent, recipes, model=None, on_recipe=None):
+def purchase_rules(intent):
     have = ingredient_names(intent["ingredients"])
     allowed = intent["can_buy"]
     if allowed is not None:
         allowed = ingredient_names(allowed)
         # При противоречии в разборе считаем продукт возможной покупкой.
         have -= allowed
+    limit = intent["max_extra"]
+    return have, allowed, 2 if limit is None else min(limit, 2)
+
+
+def acceptable_rating(recipe):
+    rating = recipe.get("rating")
+    return not rating or (rating[2] or rating[3]) < 3 or rating[0] / rating[1] >= 0.6
+
+
+def match_recipe(recipe, required, have, allowed, limit):
+    absent = required - have
+    assumed = set()
+    optional = set()
+    if recipe.get("web_steps"):
+        assumed = absent & {"вода", "соль"}
+        optional = ingredient_names(
+            name for name, amount in recipe["ingredients"].items() if amount.casefold() == "по вкусу"
+        ) & SEASONINGS
+    missing = absent - assumed - optional
+    if len(missing) <= limit and (allowed is None or missing <= allowed):
+        return recipe, missing, assumed, optional
+    return None
+
+
+def suggest_recipes(intent, recipes, model=None, on_recipe=None):
+    have, allowed, limit = purchase_rules(intent)
     if not have:
         return HELP
     excluded = excluded_ingredients(intent)
-    limit = intent["max_extra"]
-    limit = 2 if limit is None else min(limit, 2)
 
     matches = []
     for recipe in recipes:
         required = ingredient_names(recipe["ingredients"])
         if required & excluded or not (required - PANTRY) & have:
             continue
-        rating = recipe.get("rating")
-        if rating and (rating[2] or rating[3]) >= 3 and rating[0] / rating[1] < 0.6:
+        if not acceptable_rating(recipe):
             continue
-        absent = required - have
-        assumed = set()
-        optional = set()
-        if recipe.get("web_steps"):
-            assumed = absent & {"вода", "соль"}
-            optional = ingredient_names(
-                name for name, amount in recipe["ingredients"].items() if amount.casefold() == "по вкусу"
-            ) & SEASONINGS
-        missing = absent - assumed - optional
-        if len(missing) <= limit and (allowed is None or missing <= allowed):
-            matches.append((recipe, missing, assumed, optional))
+        match = match_recipe(recipe, required, have, allowed, limit)
+        if match:
+            matches.append(match)
 
     matches.sort(key=rank_match)
     ready = next((match for match in matches if not match[1]), None)
@@ -184,26 +193,28 @@ def suggest_recipes(intent, recipes, model=None, on_recipe=None):
 
 def describe_recipe(intent, target, model, local_recipes, on_recipe):
     candidates, reachable = search({target}, prefer_cooked=len(target.split()) == 1)
-    groups = stems({target})
+    terms = [word for group in stems({target}) for word in group]
     excluded = excluded_ingredients(intent)
+    have, allowed, limit = purchase_rules(intent)
+    restricted = allowed is not None or intent["max_extra"] is not None
     for pool in (candidates, local_recipes):
         ranked = []
         for recipe in pool:
-            title_terms = "-".join(word for group in stems({recipe["title"]}) for word in group)
-            score = score_path(recipe.get("source", "") + "/" + title_terms, groups)
-            if not score or ingredient_names(recipe["ingredients"]) & excluded:
+            title_words = [word for group in stems({recipe["title"]}) for word in group]
+            score = sum(any(word.startswith(term) for word in title_words) for term in terms)
+            required = ingredient_names(recipe["ingredients"])
+            if not score or required & excluded or not acceptable_rating(recipe):
                 continue
-            rating = recipe.get("rating")
-            if rating and (rating[2] or rating[3]) >= 3 and rating[0] / rating[1] < 0.6:
+            match = (match_recipe(recipe, required, have, allowed, limit) if restricted
+                     else (recipe, set(), set(), set()))
+            if match is None:
                 continue
             technique = cooking_priority(recipe.get("source", "")) if len(target.split()) == 1 else 0
-            order = (-score, -technique, len(recipe["ingredients"]), -rating_quality(recipe), recipe["title"])
-            ranked.append((order, recipe))
+            order = (-score, len(match[1]), -technique, -rating_quality(recipe), len(required), recipe["title"])
+            ranked.append((order, match))
         if ranked:
-            recipe = min(ranked, key=lambda item: item[0])[1]
-            return "Вот что понадобится для рецепта:\n" + format_recipe(
-                recipe, set(), set(), set(), model, on_recipe
-            )
+            match = min(ranked, key=lambda item: item[0])[1]
+            return "Вот что понадобится для рецепта:\n" + format_recipe(*match, model, on_recipe)
     return (
         "На проверенных сайтах не нашёл подходящего рецепта для этого блюда."
         if reachable else "Сайты рецептов сейчас не отвечают."
@@ -212,20 +223,18 @@ def describe_recipe(intent, target, model, local_recipes, on_recipe):
 
 def reply(message, model, recipes, on_recipe=None):
     message = message.strip()
-    if not message or message.casefold() in {"/start", "/help", "начать", "привет"}:
+    if not message:
         return HELP
     if len(message) > 500:
         return "Сократи запрос до 500 символов и отправь его ещё раз."
-    intent = normalized(json.loads(ask_model(model, message)))
-    text = message.casefold().replace("ё", "е")
-    if (RECIPE_QUESTION.search(text) and not STOCK_MENTION.search(text)
-            and intent["max_extra"] is None and intent["can_buy"] is None):
-        target = recipe_target(model, message)
-        if target:
-            return describe_recipe(intent, target, model, recipes, on_recipe)
+    mode, target, intent = understand_request(model, message)
+    if mode == "help":
+        return HELP
+    if mode == "dish":
+        return describe_recipe(intent, target.strip(), model, recipes, on_recipe)
     keywords = ingredient_names(intent["ingredients"]) - PANTRY
     if keywords:
-        found, reachable = search(keywords)
+        found, reachable = search(keywords, pantry=True)
         answer = suggest_recipes(intent, found, model, on_recipe)
         if answer != NO_MATCH:
             return answer

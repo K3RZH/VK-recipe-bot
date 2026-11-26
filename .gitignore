@@ -6,4 +6,6 @@ __pycache__/
 .ollama-local/
 .miniapp-local/
 .recipe-cache/
+.search-local/
+.training/
 baseline.txt

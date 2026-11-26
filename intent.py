@@ -69,24 +69,46 @@ def ask_model(model, message):
     return structured_chat(model, PROMPT, message, SCHEMA)
 
 
-def recipe_target(model, message):
-    schema = {
-        "type": "object",
-        "properties": {"dish": {"type": ["string", "null"], "maxLength": 80}},
-        "required": ["dish"],
-        "additionalProperties": False,
-    }
-    prompt = (
-        "Выдели блюдо или основной продукт, который пользователь хочет приготовить. "
-        "Верни по-русски в именительном падеже. Сохрани явный способ приготовления, "
-        "если он указан. Не принимай список имеющихся продуктов за блюдо. "
-        "«Хочу сделать лосося, что понадобится?» → {\"dish\":\"лосось\"}. "
-        "«Какие продукты нужны для борща?» → {\"dish\":\"борщ\"}. "
-        "Если конкретного блюда или продукта нет, верни {\"dish\":null}."
-    )
-    result = json.loads(structured_chat(model, prompt, message, schema))
-    dish = result.get("dish") if isinstance(result, dict) else None
-    return dish.strip() if isinstance(dish, str) and 0 < len(dish.strip()) <= 80 else None
+REQUEST_SCHEMA = {
+    **SCHEMA,
+    "properties": {
+        **PROPERTIES,
+        "mode": {"enum": ["dish", "pantry", "help"]},
+        "dish": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 80}, {"type": "null"}]},
+    },
+    "required": [*PROPERTIES, "mode", "dish"],
+}
+REQUEST_PROMPT = (
+    """Разбери кулинарный запрос по смыслу. Исправляй опечатки в названиях.
+dish: человек хочет приготовить конкретное блюдо или продукт. В поле dish дай
+только название в именительном падеже и явно заданный способ приготовления.
+pantry: человек перечисляет продукты, чтобы подобрать рецепт. dish=null.
+help: приветствие, просьба без блюда и продуктов или другая тема. dish=null.
+ingredients: продукты из списка запасов. Желаемое блюдо и покупки не являются запасами.
+excluded: продукты, которые нельзя добавлять. «У меня нет» не означает запрет.
+Если запасов или запретов не назвали, укажи []. Не пиши в списке «нет» или «не указано».
+can_buy: названия разрешённых покупок или null. max_extra: явный лимит покупок
+или null. При отказе от покупок укажи can_buy=[] и max_extra=0.
+Названия продуктов пиши в именительном падеже, без количества.
+
+«Камбалу как пожарить?» → {"mode":"dish","dish":"жареная камбала","ingredients":[],"excluded":[],"can_buy":null,"max_extra":null}
+«малина кефир, докуплю только мёд» → {"mode":"pantry","dish":null,"ingredients":["малина","кефир"],"excluded":[],"can_buy":["мёд"],"max_extra":null}
+«Испеку хлеб без тмина, мука уже есть» → {"mode":"dish","dish":"хлеб в духовке","ingredients":["мука"],"excluded":["тмин"],"can_buy":null,"max_extra":null}
+
+Верни только JSON по схеме: """ + json.dumps(REQUEST_SCHEMA, ensure_ascii=False)
+)
+
+
+def understand_request(model, message):
+    result = json.loads(structured_chat(model, REQUEST_PROMPT, message, REQUEST_SCHEMA))
+    if not isinstance(result, dict) or result.keys() != REQUEST_SCHEMA["properties"].keys():
+        raise ValueError("Не удалось разобрать запрос по схеме.")
+    mode, dish = result.pop("mode"), result.pop("dish")
+    if mode not in {"dish", "pantry", "help"}:
+        raise ValueError("Неизвестный тип запроса.")
+    if mode == "dish" and (not isinstance(dish, str) or not 0 < len(dish.strip()) <= 80):
+        raise ValueError("В запросе не определилось название блюда.")
+    return mode, dish, normalized(result)
 
 
 def structured_chat(model, prompt, message, schema):

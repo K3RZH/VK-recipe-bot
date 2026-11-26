@@ -3,16 +3,18 @@ import json
 import re
 import time
 import xml.etree.ElementTree as ET
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
+from html import unescape
 from html.parser import HTMLParser
 from urllib.parse import urlsplit
 from urllib.robotparser import RobotFileParser
 
 from intent import structured_chat
+from open_web import AGENT, NETWORK_ERRORS, discover, recipe_address, recipe_page
 
 
-AGENT = "RecipeIdea/0.1 (educational recipe search)"
 HOSTS = {
     "finecooking.ru": (r"/recipe/[a-z0-9-]+", ("/sitemap-recipes.xml",), "FineCooking"),
     "1000.menu": (
@@ -27,7 +29,6 @@ TRANS = str.maketrans(dict(zip(
      "o", "p", "r", "s", "t", "u", "f", "kh", "ts", "ch", "sh", "sch", "",
      "y", "", "e", "yu", "ya"),
 )))
-NETWORK_ERRORS = (OSError, http.client.HTTPException)
 AMOUNT = re.compile(
     r"\s+[-–—]\s+|\s+(?=\d+(?:[.,]\d+)?\s+(?:г|кг|мл|л|шт|миллилитр|пуч|чайн|стол|зуб|стак|бан|щепот))",
     re.I,
@@ -120,28 +121,38 @@ class RecipeMarkup(HTMLParser):
         self.steps = []
         self.title = ""
         self.capture = None
+        self.property = None
+        self.recipe_scope = False
         self.chunks = []
         self.depth = 0
         self.supplement = False
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
+        itemtype = attrs.get("itemtype") or ""
+        if any(value in {"https://schema.org/Recipe", "http://schema.org/Recipe"} for value in itemtype.split()):
+            self.recipe_scope = True
         if self.capture:
             if tag == self.capture:
                 self.depth += 1
-            if self.capture == "div" and "infoblock" in attrs.get("class", "").split():
+            if self.capture == "div" and "infoblock" in (attrs.get("class") or "").split():
                 self.supplement = True
             if tag in {"br", "p"} and not self.supplement:
                 self.chunks.append(" ")
             return
-        if tag == "meta" and "itemprop" in attrs and "content" in attrs:
-            self.meta.setdefault(attrs["itemprop"], []).append(attrs["content"])
+        prop = attrs.get("itemprop")
+        fields = {"recipeIngredient", "recipeInstructions", "ratingValue", "bestRating", "ratingCount", "reviewCount"}
+        if prop in fields and isinstance(attrs.get("content"), str):
+            self.meta.setdefault(prop, []).append(attrs["content"])
+            return
         if (
             tag == "script" and attrs.get("type") == "application/ld+json"
             or tag == "h1" and not self.title
-            or tag == "div" and "instruction" in attrs.get("class", "").split()
+            or tag == "div" and "instruction" in (attrs.get("class") or "").split()
+            or prop in fields and tag not in {"meta", "link", "input", "img"}
         ):
             self.capture = tag
+            self.property = prop if prop in fields else None
             self.depth = 1
             self.chunks = []
             self.supplement = False
@@ -156,15 +167,18 @@ class RecipeMarkup(HTMLParser):
         self.depth -= 1
         if self.depth:
             return
-        text = " ".join("".join(self.chunks).split())
+        raw = "".join(self.chunks)
+        text = " ".join(raw.split())
         self.capture = None
         if tag == "script":
             try:
-                self.documents.append(json.loads(text))
-            except ValueError:
+                self.documents.append(json.loads(raw))
+            except (ValueError, RecursionError):
                 pass
         elif tag == "h1":
             self.title = text
+        elif self.property and self.property != "recipeInstructions" and text:
+            self.meta.setdefault(self.property, []).append(text)
         elif text:
             self.steps.append(text)
 
@@ -184,6 +198,8 @@ def rating_info(data):
         value = str(data.get(key, ""))
         return int(value) if re.fullmatch(r"[0-9]{1,8}", value) else 0
 
+    if not isinstance(data, dict):
+        return None
     try:
         value = float(data.get("ratingValue") or 0)
         top = float(data.get("bestRating") or 5)
@@ -194,32 +210,64 @@ def rating_info(data):
     return None
 
 
+def recipe_data(documents):
+    pending = deque(documents)
+    while pending:
+        item = pending.popleft()
+        if isinstance(item, list):
+            pending.extend(item)
+        elif isinstance(item, dict):
+            types = item.get("@type")
+            if (types == "Recipe" or isinstance(types, list) and "Recipe" in types) and item.get("recipeIngredient"):
+                return item
+            if "@graph" in item:
+                pending.append(item["@graph"])
+    return None
+
+
+def recipe_steps(instructions):
+    pending = [instructions]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, list):
+            pending.extend(reversed(item))
+        elif isinstance(item, dict):
+            pending.append(item.get("itemListElement", item.get("text")))
+        elif isinstance(item, str):
+            text = " ".join(unescape(re.sub(r"<[^>]+>", " ", item)).split())
+            if text:
+                yield text
+
+
 def parse_recipe(host, path, markup):
     parsed = RecipeMarkup()
     parsed.feed(markup)
-    structured = next((
-        item for item in parsed.documents
-        if isinstance(item, dict) and item.get("@type") == "Recipe" and item.get("recipeIngredient")
-    ), None)
+    structured = recipe_data(parsed.documents)
     if structured:
-        title = structured["name"]
+        title = structured.get("name")
         ingredients = structured["recipeIngredient"]
-        steps = [step.get("text", "") for step in structured.get("recipeInstructions", []) if isinstance(step, dict)]
+        steps = list(recipe_steps(structured.get("recipeInstructions")))
         rating = rating_info(structured.get("aggregateRating") or {})
-    else:
+    elif host in HOSTS or parsed.recipe_scope:
         title = parsed.title
         ingredients = parsed.meta.get("recipeIngredient", [])
-        steps = parsed.steps
+        steps = parsed.steps or parsed.meta.get("recipeInstructions", [])
         rating = rating_info({name: values[0] for name, values in parsed.meta.items()})
-    if not title or not ingredients or not steps or any(not isinstance(line, str) for line in ingredients):
+    else:
+        return None
+    if (not isinstance(title, str) or not title.strip() or not isinstance(ingredients, list)
+            or not ingredients or not steps or any(not isinstance(line, str) for line in ingredients)):
+        return None
+    ingredients = ingredient_amounts(" ".join(unescape(line).split()) for line in ingredients)
+    if not ingredients:
         return None
     return {
-        "title": title,
-        "ingredients": ingredient_amounts(ingredients),
+        "title": " ".join(unescape(title).split()),
+        "ingredients": ingredients,
         "steps": [],
         "web_steps": steps,
         "source": f"https://{host}{path}",
-        "source_name": HOSTS[host][2],
+        "source_name": HOSTS[host][2] if host in HOSTS else host.removeprefix("www."),
         "rating": rating,
     }
 
@@ -264,14 +312,53 @@ def search_site(host, groups, period, prefer_cooked):
     return recipes, reachable or best == 0
 
 
-def search(ingredients, *, prefer_cooked=False):
+def search_open(ingredients, prefer_cooked, pantry):
+    try:
+        urls = discover(ingredients, prefer_cooked, pantry)
+    except (*NETWORK_ERRORS, ValueError):
+        return [], False
+    sites = {}
+    for url in urls:
+        try:
+            host, path = recipe_address(url)
+        except ValueError:
+            continue
+        paths = sites.setdefault(host, [])
+        if path not in paths and len(paths) < 2:
+            paths.append(path)
+
+    period = int(time.time() // 3600)
+
+    def read_site(item):
+        host, paths = item
+        recipes = []
+        for path in paths:
+            try:
+                markup = recipe_page(host, path, period)
+                recipe = parse_recipe(host, path, markup) if markup else None
+            except (*NETWORK_ERRORS, ValueError, LookupError):
+                continue
+            if recipe:
+                recipes.append(recipe)
+        return recipes
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(read_site, list(sites.items())[:8]))
+    return [recipe for recipes in results for recipe in recipes], True
+
+
+def search(ingredients, *, prefer_cooked=False, pantry=False):
     groups = stems(ingredients)
     if not groups:
         return [], True
     period = int(time.time() // 21_600)
-    with ThreadPoolExecutor(max_workers=len(HOSTS)) as pool:
+    with ThreadPoolExecutor(max_workers=len(HOSTS) + 1) as pool:
+        broad = pool.submit(search_open, ingredients, prefer_cooked, pantry)
         results = list(pool.map(lambda host: search_site(host, groups, period, prefer_cooked), HOSTS))
-    return [recipe for recipes, _ok in results for recipe in recipes], any(ok for _recipes, ok in results)
+        discovered, broad_ok = broad.result()
+    recipes = {recipe["source"]: recipe for candidates, _ok in results for recipe in candidates}
+    recipes.update((recipe["source"], recipe) for recipe in discovered)
+    return list(recipes.values()), broad_ok or any(ok for _recipes, ok in results)
 
 
 def summarize(model, recipe):
