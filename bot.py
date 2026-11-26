@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from intent import DEFAULT_MODEL, understand_request
+from menu import MENU_TITLES, generate_menu
 from themealdb import CACHE_PATH
 from web_recipes import cooking_priority, search, stems, summarize
 
@@ -83,27 +84,31 @@ def ingredient_names(items):
 def format_recipe(recipe, missing, assumed, optional, model, on_recipe=None):
     if on_recipe is not None:
         on_recipe(recipe)
-    ingredients = ", ".join(
-        f"{name} ({amount})" for name, amount in recipe["ingredients"].items()
-    )
-    lines = [recipe["title"], f"Продукты: {ingredients}."]
+    lines = [recipe["title"]]
+    if recipe.get("rating"):
+        score, maximum, votes, reviews = recipe["rating"]
+        detail = f", оценок: {votes}" if votes else f", отзывов: {reviews}" if reviews else ""
+        lines.append(f"Рейтинг: {score:g}/{maximum:g}{detail}")
+    lines.extend(("", "Ингредиенты"))
+    for name, amount in recipe["ingredients"].items():
+        amount = (amount or "").strip()
+        if amount.casefold() in {"количество не указано", "не указано"}:
+            amount = ""
+        lines.append(f"• {name} — {amount}" if amount else f"• {name}")
     if missing:
-        lines.append("Докупить: " + ", ".join(sorted(missing)) + ".")
+        lines.extend(("", "Докупить: " + ", ".join(sorted(missing)) + "."))
     if assumed:
         lines.append("Из базового понадобится: " + ", ".join(sorted(assumed)) + ".")
     if optional:
         lines.append("Можно добавить по вкусу: " + ", ".join(sorted(optional)) + ".")
-    if recipe.get("rating"):
-        score, maximum, votes, reviews = recipe["rating"]
-        detail = f", оценок: {votes}" if votes else f", отзывов: {reviews}" if reviews else ""
-        lines.append(f"Оценка на сайте: {score:g}/{maximum:g}{detail}.")
     steps = summarize(model, recipe) if model and recipe.get("web_steps") else recipe["steps"]
     if steps:
+        lines.extend(("", "Приготовление"))
         lines.extend(f"{number}. {step}" for number, step in enumerate(steps, 1))
     elif recipe.get("web_steps"):
-        lines.append("Пошаговое приготовление — в оригинале рецепта.")
+        lines.extend(("", "Шаги приготовления доступны в оригинале рецепта."))
     if recipe.get("source"):
-        lines.extend(("Источник: " + recipe.get("source_name", "TheMealDB"), recipe["source"]))
+        lines.extend(("", "Источник: " + recipe.get("source_name", "TheMealDB"), recipe["source"]))
     return "\n".join(lines)
 
 
@@ -191,7 +196,7 @@ def suggest_recipes(intent, recipes, model=None, on_recipe=None):
     return "\n\n".join(result)
 
 
-def describe_recipe(intent, target, model, local_recipes, on_recipe):
+def describe_recipe(intent, target, model, local_recipes, on_recipe, *, from_menu=False):
     candidates, reachable = search({target}, prefer_cooked=len(target.split()) == 1)
     terms = [word for group in stems({target}) for word in group]
     excluded = excluded_ingredients(intent)
@@ -205,6 +210,10 @@ def describe_recipe(intent, target, model, local_recipes, on_recipe):
             required = ingredient_names(recipe["ingredients"])
             if not score or required & excluded or not acceptable_rating(recipe):
                 continue
+            if from_menu and score < len(terms):
+                ingredient_words = [word for group in stems(required) for word in group]
+                if any(not any(word.startswith(term) for word in [*title_words, *ingredient_words]) for term in terms):
+                    continue
             match = (match_recipe(recipe, required, have, allowed, limit) if restricted
                      else (recipe, set(), set(), set()))
             if match is None:
@@ -214,22 +223,25 @@ def describe_recipe(intent, target, model, local_recipes, on_recipe):
             ranked.append((order, match))
         if ranked:
             match = min(ranked, key=lambda item: item[0])[1]
-            return "Вот что понадобится для рецепта:\n" + format_recipe(*match, model, on_recipe)
+            return format_recipe(*match, model, on_recipe)
     return (
         "На проверенных сайтах не нашёл подходящего рецепта для этого блюда."
         if reachable else "Сайты рецептов сейчас не отвечают."
     )
 
 
-def reply(message, model, recipes, on_recipe=None):
+def reply(message, model, recipes, on_recipe=None, *, on_menu=None):
     message = message.strip()
     if not message:
         return HELP
     if len(message) > 500:
         return "Сократи запрос до 500 символов и отправь его ещё раз."
-    mode, target, intent = understand_request(model, message)
+    mode, target, intent = understand_request(model, message, allow_menu=on_menu is not None)
+    if on_menu and mode in MENU_TITLES:
+        on_menu(generate_menu(model, message, mode), intent["excluded"])
+        return MENU_TITLES[mode]
     if mode == "help":
-        return HELP
+        return HELP + " Можно также попросить меню на неделю или для ресторана." if on_menu else HELP
     if mode == "dish":
         return describe_recipe(intent, target.strip(), model, recipes, on_recipe)
     keywords = ingredient_names(intent["ingredients"]) - PANTRY

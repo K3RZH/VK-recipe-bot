@@ -9,8 +9,9 @@ import sys
 import time
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
-from bot import load_recipes, reply
+from bot import describe_recipe, load_recipes, reply
 from intent import DEFAULT_MODEL
+from menu import dish_name
 from recipe_photos import IMAGE_HOSTS, find_photos, photo_url
 
 
@@ -23,6 +24,8 @@ UPLOAD_DOMAINS = (".vk.com", ".vk.ru", ".userapi.com", ".vk-cdn.net")
 PHOTO_TYPES = {"image/jpeg": "jpg", "image/png": "png"}
 PHOTO_LIMIT = 5 * 1024 * 1024
 MESSAGE_LIMIT = 4000
+MENU_BUTTONS = 6
+PAYLOAD_LIMIT = 255
 
 
 class VkError(RuntimeError):
@@ -90,6 +93,44 @@ def message_parts(text):
         text = text[stop:].lstrip("\n")
     if text:
         yield text
+
+
+def menu_cards(heading, sections, excluded):
+    cards = []
+    lines, buttons = [heading, "Нажми кнопку с номером блюда, чтобы открыть рецепт."], []
+    number = 0
+    for title, dishes in sections:
+        if len(buttons) + len(dishes) > MENU_BUTTONS:
+            cards.append(("\n".join(lines), buttons))
+            lines, buttons = [heading], []
+        lines.extend(("", title))
+        for meal, dish in dishes:
+            number += 1
+            description = f"{meal} · {dish}" if meal else dish
+            lines.append(f"{number}. {description}")
+            payload = json.dumps({"r": dish, "x": excluded}, ensure_ascii=False, separators=(",", ":"))
+            if len(payload.encode("utf-8")) > PAYLOAD_LIMIT:
+                raise ValueError("Список исключений слишком длинный для кнопки ВК.")
+            buttons.append({"color": "secondary", "action": {
+                "type": "text", "label": f"Покажи подробно №{number}", "payload": payload,
+            }})
+    cards.append(("\n".join(lines), buttons))
+    return [(text, [buttons[start:start + 2] for start in range(0, len(buttons), 2)]) for text, buttons in cards]
+
+
+def menu_choice(payload):
+    if not isinstance(payload, str) or len(payload.encode("utf-8")) > PAYLOAD_LIMIT:
+        return None
+    try:
+        value = json.loads(payload)
+        if not isinstance(value, dict) or value.keys() != {"r", "x"}:
+            return None
+        excluded = value["x"]
+        if not isinstance(excluded, list) or not all(isinstance(item, str) and item.strip() for item in excluded):
+            return None
+        return dish_name(value["r"]), excluded
+    except (ValueError, RecursionError):
+        return None
 
 
 class VkClient:
@@ -202,17 +243,19 @@ class VkClient:
         access_key = saved[0].get("access_key")
         return f"{attachment}_{access_key}" if access_key else attachment
 
-    def send(self, peer_id, conversation_message_id, text, attachments=()):
+    def send(self, peer_id, conversation_message_id, text, attachments=(), *, buttons=(), offset=0):
         parts = list(message_parts(text))
         for index, part in enumerate(parts):
             event_id = f"{peer_id}:{conversation_message_id}"
-            if index:
-                event_id += f":{index}"
+            if offset + index:
+                event_id += f":{offset + index}"
             digest = hashlib.blake2s(event_id.encode("ascii"), digest_size=4).digest()
             random_id = int.from_bytes(digest, "big") % (2**31 - 1) + 1
             params = {"peer_id": peer_id, "random_id": random_id, "message": part}
             if attachments and index == len(parts) - 1:
                 params["attachment"] = ",".join(attachments)
+            if buttons and index == len(parts) - 1:
+                params["keyboard"] = json.dumps({"inline": True, "buttons": buttons}, ensure_ascii=False)
             try:
                 self.call("messages.send", **params)
             except IO_ERRORS:
@@ -237,25 +280,51 @@ def handle_update(vk, update, model, recipes):
     ):
         return
     selected = []
+    menu = []
+
+    def accept_menu(sections, excluded):
+        menu.append((sections, excluded))
+
     try:
-        answer = reply(text, model, recipes, on_recipe=selected.append)
+        choice = menu_choice(message.get("payload"))
+        if choice:
+            dish, excluded = choice
+            intent = {"excluded": excluded, "ingredients": [], "can_buy": None, "max_extra": None}
+            answer = describe_recipe(intent, dish, model, recipes, selected.append, from_menu=True)
+        else:
+            answer = reply(text, model, recipes, on_recipe=selected.append, on_menu=accept_menu)
     except (OSError, http.client.HTTPException, ValueError, RuntimeError):
         print("Локальная модель не обработала сообщение.", file=sys.stderr)
         answer = "Не удалось разобрать запрос. Попробуй отправить его ещё раз чуть позже."
         selected.clear()
+    if menu:
+        try:
+            cards = menu_cards(answer, *menu[0])
+        except ValueError:
+            answer = "Список исключений слишком длинный для кнопок. Сократи его и повтори запрос."
+        else:
+            try:
+                for offset, (page, buttons) in enumerate(cards):
+                    vk.send(peer_id, message_id, page, buttons=buttons, offset=offset)
+            except (*IO_ERRORS, VkError):
+                print("Не удалось отправить меню в VK.", file=sys.stderr)
+            return
 
     attachments = []
-    credits = []
+    photo_pages = []
     for photo in find_photos(selected):
         try:
             attachments.append(vk.upload_photo(peer_id, photo["src"]))
-            credits.append(f"Фото «{photo['title']}» · {photo['author']} · {photo['license']}\n{photo['page']}\n{photo['license_url']}")
+            photo_pages.append(photo["page"])
         except (*IO_ERRORS, VkError):
             print("Фото недоступно для отправки в VK.", file=sys.stderr)
-    if credits:
-        answer += "\n\n" + "\n\n".join(credits)
+    photo_buttons = [
+        [{"action": {"type": "open_link", "label": "Автор и лицензия фото" if len(photo_pages) == 1
+                     else f"Фото {number} · автор и лицензия", "link": page}}]
+        for number, page in enumerate(photo_pages, 1)
+    ]
     try:
-        vk.send(peer_id, message_id, answer, attachments)
+        vk.send(peer_id, message_id, answer, attachments, buttons=photo_buttons)
     except IO_ERRORS:
         print("Не удалось отправить ответ в VK после двух попыток.", file=sys.stderr)
     except VkError as error:

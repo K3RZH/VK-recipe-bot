@@ -78,8 +78,12 @@ REQUEST_SCHEMA = {
     },
     "required": [*PROPERTIES, "mode", "dish"],
 }
-REQUEST_PROMPT = (
-    """Разбери кулинарный запрос по смыслу. Исправляй опечатки в названиях.
+MENU_MODES = ("menu", "menu_week", "menu_restaurant")
+VK_REQUEST_SCHEMA = {
+    **REQUEST_SCHEMA,
+    "properties": {**REQUEST_SCHEMA["properties"], "mode": {"enum": ["dish", "pantry", "help", *MENU_MODES]}},
+}
+REQUEST_RULES = """Разбери кулинарный запрос по смыслу. Исправляй опечатки в названиях.
 dish: человек хочет приготовить конкретное блюдо или продукт. В поле dish дай
 только название в именительном падеже и явно заданный способ приготовления.
 pantry: человек перечисляет продукты, чтобы подобрать рецепт. dish=null.
@@ -95,23 +99,34 @@ can_buy: названия разрешённых покупок или null. max
 «малина кефир, докуплю только мёд» → {"mode":"pantry","dish":null,"ingredients":["малина","кефир"],"excluded":[],"can_buy":["мёд"],"max_extra":null}
 «Испеку хлеб без тмина, мука уже есть» → {"mode":"dish","dish":"хлеб в духовке","ingredients":["мука"],"excluded":["тмин"],"can_buy":null,"max_extra":null}
 
-Верни только JSON по схеме: """ + json.dumps(REQUEST_SCHEMA, ensure_ascii=False)
-)
+"""
+JSON_INSTRUCTION = "Верни только JSON по схеме: "
+REQUEST_PROMPT = REQUEST_RULES + JSON_INSTRUCTION + json.dumps(REQUEST_SCHEMA, ensure_ascii=False)
+VK_REQUEST_PROMPT = REQUEST_RULES + """Если нужен набор блюд, используй один из режимов:
+menu_week — меню на неделю или на семь дней. menu_restaurant — ассортимент ресторана, кафе или бистро.
+menu — меню для события, приёма пищи или дня, если не подходит режим выше.
+Во всех трёх режимах dish=null. Не предполагай продукты и запреты для меню.
+«Покажи подробно борщ» — dish. «Меню на ужин» — menu.
+«Сделай меню для кафе» → {"mode":"menu_restaurant","dish":null,"ingredients":[],"excluded":[],"can_buy":null,"max_extra":null}
+Учитывай формулировки вроде «распиши завтраки и обеды с понедельника по воскресенье» — menu_week.
+
+""" + JSON_INSTRUCTION + json.dumps(VK_REQUEST_SCHEMA, ensure_ascii=False)
 
 
-def understand_request(model, message):
-    result = json.loads(structured_chat(model, REQUEST_PROMPT, message, REQUEST_SCHEMA))
-    if not isinstance(result, dict) or result.keys() != REQUEST_SCHEMA["properties"].keys():
+def understand_request(model, message, *, allow_menu=False):
+    schema, prompt = (VK_REQUEST_SCHEMA, VK_REQUEST_PROMPT) if allow_menu else (REQUEST_SCHEMA, REQUEST_PROMPT)
+    result = json.loads(structured_chat(model, prompt, message, schema))
+    if not isinstance(result, dict) or result.keys() != schema["properties"].keys():
         raise ValueError("Не удалось разобрать запрос по схеме.")
     mode, dish = result.pop("mode"), result.pop("dish")
-    if mode not in {"dish", "pantry", "help"}:
+    if mode not in schema["properties"]["mode"]["enum"]:
         raise ValueError("Неизвестный тип запроса.")
     if mode == "dish" and (not isinstance(dish, str) or not 0 < len(dish.strip()) <= 80):
         raise ValueError("В запросе не определилось название блюда.")
     return mode, dish, normalized(result)
 
 
-def structured_chat(model, prompt, message, schema):
+def structured_chat(model, prompt, message, schema, *, max_tokens=256):
     backend = os.environ.get("RECIPE_MODEL_BACKEND", "ollama")
     payload = {
         "model": model,
@@ -125,7 +140,7 @@ def structured_chat(model, prompt, message, schema):
         payload.update(
             format=schema,
             think=False,
-            options={"temperature": 0, "seed": 42, "num_ctx": 2048, "num_predict": 256},
+            options={"temperature": 0, "seed": 42, "num_ctx": 2048, "num_predict": max_tokens},
         )
         data = local_chat(11434, "/api/chat", payload)
         answer = data.get("message")
@@ -135,7 +150,7 @@ def structured_chat(model, prompt, message, schema):
             chat_template_kwargs={"enable_thinking": False},
             temperature=0,
             seed=42,
-            max_tokens=256,
+            max_tokens=max_tokens,
         )
         data = local_chat(8080, "/v1/chat/completions", payload)
         choices = data.get("choices", [])
